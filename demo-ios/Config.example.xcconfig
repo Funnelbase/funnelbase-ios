@@ -1,0 +1,18 @@
+// Copy this file to `Config.xcconfig` and fill in the key. That copy is gitignored — an ingest
+// key is a credential, and this is the iOS counterpart of the Android demo's `local.properties`
+// (docs/demo-app.md, "Configuration").
+//
+// Create the app in the dashboard first: Manage -> Apps -> New app, then enable the **iOS**
+// platform and generate its key. The plaintext is shown once.
+//
+// With the key left blank the app still runs; it just initialises no SDK and logs one line.
+
+ANALYTICS_API_KEY =
+
+// The endpoint. `$(SLASH)` is defined in Build.xcconfig, because an xcconfig reads `//` as the
+// start of a comment and a url written literally would be cut down to its scheme.
+//
+// `localhost` is the simulator's route to the host machine, where a local Funnelbase backend is listening.
+// A real device wants the host's LAN address, and that address needs an App Transport Security
+// exception of its own — see the NSAppTransportSecurity note in project.yml.
+ANALYTICS_ENDPOINT = http:$(SLASH)$(SLASH)localhost:8080

@@ -1,0 +1,38 @@
+# The SDK's tests and a demo build, on every pull request and push to main. The package imports
+# CryptoKit and UserNotifications, so it needs a macOS runner.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  swift-test:
+    name: swift test
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - run: swift --version
+      - run: swift test
+
+  demo:
+    name: demo build
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      # No signing: the app group and aps-environment need a developer team only on a device.
+      - run: >
+          xcodebuild -project demo-ios/TradeDemo.xcodeproj -scheme TradeDemo
+          -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO build

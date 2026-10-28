@@ -1,0 +1,165 @@
+# The iOS demo, as an xcodegen spec.
+#
+# The generated `TradeDemo.xcodeproj` is committed beside this file on purpose: whoever clones the
+# repo can open and build it without installing xcodegen, and this file stays the thing that is
+# actually edited. Regenerate with `xcodegen generate` from `demo-ios/` after changing it.
+#
+# Three targets, because push on Apple devices needs two processes: the app, and a notification
+# service extension that runs before the banner appears (see AnalyticsNotificationService in the
+# package's FunnelbaseNotificationService product). The third is the unit tests.
+
+name: TradeDemo
+
+options:
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  generateEmptyDirectories: false
+
+packages:
+  # The SDK as a local package, the repo root this demo sits in — by path, so an edit to the SDK
+  # is picked up by the next build with nothing to tag or resolve. An app outside this repo adds
+  # https://github.com/Funnelbase/funnelbase-ios by URL instead.
+  Funnelbase:
+    path: ..
+
+configFiles:
+  Debug: Build.xcconfig
+  Release: Build.xcconfig
+
+settings:
+  base:
+    # The toolchain is Swift 6.2; the language mode is 5, matching the package's own
+    # `swift-tools-version: 5.9`. Strict concurrency checking would be a change to the SDK's
+    # public surface, not to this app, so it is not something the demo should decide.
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # A phone app, like the Android demo. Nothing here has an iPad layout.
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+targets:
+  TradeDemo:
+    type: application
+    platform: iOS
+    sources:
+      - path: TradeDemo
+    dependencies:
+      - package: Funnelbase
+        product: Funnelbase
+      - target: TradeDemoNotificationService
+    settings:
+      base:
+        # The same application id as the Android demo: one product, two platform builds, and one
+        # app in the dashboard with an ingest key per platform.
+        PRODUCT_BUNDLE_IDENTIFIER: com.analytics.demo.trading
+        INFOPLIST_KEY_CFBundleDisplayName: Trade Demo
+    info:
+      path: TradeDemo/Info.plist
+      properties:
+        CFBundleDisplayName: Trade Demo
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        # Dark only, and deliberately so — see UI/Theme/Theme.swift. Declared here as well as in
+        # SwiftUI so the keyboard, the alerts and the status bar match the app rather than the
+        # phone's setting.
+        UIUserInterfaceStyle: Dark
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # A push that arrives while the app is not in the foreground is still handed to the
+        # notification service extension; this is what lets it be woken for one.
+        UIBackgroundModes:
+          - remote-notification
+        ITSAppUsesNonExemptEncryption: false
+        # The iOS counterpart of the Android demo's debug network-security-config: the local
+        # stack speaks plain http. This covers loopback and .local only, so a release build
+        # pointed at a real endpoint gains nothing from it. A physical device pointed at the
+        # host's LAN address needs an exception naming that address.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        # The two settings the app reads at runtime, substituted from Build.xcconfig by the
+        # Process Info.plist step. Nothing is baked into the source, and a blank key is a
+        # blank string here rather than a missing key.
+        AnalyticsApiKey: $(ANALYTICS_API_KEY)
+        AnalyticsEndpoint: $(ANALYTICS_ENDPOINT)
+    # The app group is what lets the extension's receipt reach the app's upload queue, and
+    # aps-environment is what lets the app register with APNs at all. Both need a real developer
+    # team to sign for a device; a simulator build needs no team and no profile, which is why the
+    # definition of done is a simulator build.
+    entitlements:
+      path: TradeDemo/TradeDemo.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.analytics.demo.trading
+        aps-environment: development
+
+  TradeDemoNotificationService:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: TradeDemoNotificationService
+    dependencies:
+      - package: Funnelbase
+        product: FunnelbaseNotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.analytics.demo.trading.NotificationService
+    info:
+      path: TradeDemoNotificationService/Info.plist
+      properties:
+        CFBundleDisplayName: Trade Demo Notifications
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+        # The extension has transport-security rules of its own, and it is the process that
+        # fetches a campaign's image. Without this a local provider's http image is refused
+        # here even though the app can reach the same host.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    entitlements:
+      path: TradeDemoNotificationService/TradeDemoNotificationService.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.analytics.demo.trading
+
+  TradeDemoTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: TradeDemoTests
+    dependencies:
+      - target: TradeDemo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.analytics.demo.trading.tests
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/TradeDemo.app/TradeDemo
+        BUNDLE_LOADER: $(TEST_HOST)
+        # A test bundle still has to be signed, and signing needs an Info.plist. There is
+        # nothing in it worth writing by hand, so it is generated.
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  TradeDemo:
+    build:
+      targets:
+        TradeDemo: all
+        TradeDemoTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - TradeDemoTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

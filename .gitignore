@@ -1,0 +1,16 @@
+# Swift Package Manager's build directory, and Xcode's per-user and derived output. None of it is
+# source: `swift build` and `xcodebuild` recreate all of it.
+.build/
+.swiftpm/
+/Package.resolved
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# The demo's real configuration. A GoogleService-Info.plist names a Firebase project and carries its
+# client keys; Config.xcconfig holds an ingest key. Config.example.xcconfig is the committed
+# template, and demo-ios/Build.xcconfig includes Config.xcconfig only if it is there.
+demo-ios/GoogleService-Info.plist
+demo-ios/Config.xcconfig

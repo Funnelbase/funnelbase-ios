@@ -1,0 +1,20 @@
+// The committed half of the demo's configuration.
+//
+// It exists so a clean clone builds. `Config.xcconfig` holds the real ingest key and is
+// gitignored, which means it is absent on a fresh checkout — and xcodegen refuses to generate a
+// project whose config file is missing. So the project points at this file, which is always here,
+// and this file pulls the other one in optionally: `#include?` is silent when the target is not
+// there. The defaults below are what a clone therefore builds with, and a blank key is the
+// signal the app reads to initialise nothing at all.
+//
+// Copy `Config.example.xcconfig` to `Config.xcconfig` to fill them in.
+
+// A url cannot be written literally in an xcconfig: `//` starts a comment, so
+// `http://localhost:8080` would silently set the endpoint to `http:`. The slashes come from a
+// variable instead, which is the usual way round it.
+SLASH = /
+
+ANALYTICS_API_KEY =
+ANALYTICS_ENDPOINT = http:$(SLASH)$(SLASH)localhost:8080
+
+#include? "Config.xcconfig"
