@@ -24,7 +24,7 @@ import Funnelbase
 Analytics.initialize(
     AnalyticsConfig(
         apiKey: key,
-        endpoint: "https://ingest.example.com",
+        endpoint: "https://ingest.funnel-base.com",
         appGroup: "group.com.example.app"   // needed for push; see below
     )
 )
