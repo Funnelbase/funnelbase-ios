@@ -37,7 +37,7 @@ extension if you send push.
 ## Quick start
 
 Create an app in the Funnelbase dashboard, enable its iOS platform and generate an ingest key.
-Then, as early as the app starts:
+The endpoint is shown on Manage → Platforms; a self-hosted install uses its own address. Then, as early as the app starts:
 
 ```swift
 import Funnelbase
@@ -45,7 +45,7 @@ import Funnelbase
 Analytics.initialize(
     AnalyticsConfig(
         apiKey: "ana_ios_…",
-        endpoint: "https://ingest.example.com",
+        endpoint: "https://ingest.funnel-base.com",
         appGroup: "group.com.example.app"   // only needed for push
     )
 )
