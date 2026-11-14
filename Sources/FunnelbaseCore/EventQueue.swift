@@ -71,6 +71,14 @@ public final class EventQueue {
         write(remaining)
     }
 
+    /// Whether an event is still waiting here, found by its id the way a dropped batch's events are.
+    public func contains(eventId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let marker = "\"event_id\":\"\(eventId)\""
+        return lines().contains { $0.contains(marker) }
+    }
+
     public func clear() {
         lock.lock()
         defer { lock.unlock() }

@@ -35,9 +35,8 @@ public final class AnalyticsPush {
         lock.lock()
         defer { lock.unlock() }
         self.client = client
-        // The app's own store, not the group's: a group container survives the app being deleted,
-        // and a remembered registration is one the SDK would never send again.
-        self.tokens = PushTokenStore(defaults: Storage.appDefaults())
+        // The client's, in the app's own store: the registration is confirmed by its uploads.
+        self.tokens = client.pushTokens
         // The registry holds the phone's language and time zone, and a run picks a template's copy
         // by them — so a change to either is registered at the next launch without the app asking,
         // and while the app runs, when the system says one changed.
@@ -53,7 +52,8 @@ public final class AnalyticsPush {
     // MARK: - The token
 
     /// Registers this install's push token, sending `$push_token` when it says something the
-    /// registry does not already know. Safe to call on every launch.
+    /// registry does not already know, or when the last registration never reached the server (an
+    /// upload refused for good) and is no longer queued. Safe to call on every launch.
     public func setToken(_ token: String, kind: String = TokenKinds.fcm) {
         withAuthorization { [weak self] status in
             self?.send(token: token, kind: kind, status: status)
@@ -67,10 +67,12 @@ public final class AnalyticsPush {
     }
 
     /// Re-registers the last token if the notification permission, the phone's language or its time
-    /// zone has changed under it. The SDK calls it at startup and when the language or time zone
-    /// changes; call it after asking for permission, and on returning to the foreground if the app
-    /// cares.
+    /// zone has changed under it, or if the server never confirmed it and it is no longer queued;
+    /// sends again, too, any topic choice an upload lost. The SDK calls it at startup and when the
+    /// language or time zone changes; call it after asking for permission, and on returning to the
+    /// foreground if the app cares.
     public func refreshToken() {
+        client?.resendPendingTopicChoices()
         guard let token = tokens?.token else { return }
         setToken(token, kind: tokens?.kind ?? TokenKinds.fcm)
     }
@@ -83,7 +85,8 @@ public final class AnalyticsPush {
     internal func identityChanged() {
         guard let tokens, let token = tokens.token else { return }
         let kind = tokens.kind ?? TokenKinds.fcm
-        tokens.forget()
+        // On the client's worker, behind the identify or reset just handed to it.
+        client?.forgetPushRegistration()
         setToken(token, kind: kind)
     }
 
@@ -170,18 +173,8 @@ public final class AnalyticsPush {
     // MARK: - Internals
 
     private func send(token: String, kind: String, status: String) {
-        guard let tokens, let client else { return }
-        let region = DeviceInfo.region()
-        guard tokens.shouldSend(token: token, kind: kind, status: status, region: region) else { return }
-        tokens.remember(token: token, kind: kind, status: status, region: region)
-        client.trackPassive(
-            ReservedEvents.pushToken,
-            properties: [
-                ReservedEvents.pushTokenToken: token,
-                ReservedEvents.pushTokenKind: kind,
-                ReservedEvents.pushTokenStatus: status,
-            ]
-        )
+        // Decided on the client's worker, where the uploads that confirm a registration run too.
+        client?.registerPushToken(token, kind: kind, status: status, region: DeviceInfo.region())
     }
 
     private func withAuthorization(_ body: @escaping (String) -> Void) {

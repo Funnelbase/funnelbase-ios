@@ -117,15 +117,21 @@ open class TopicsFetcher {
 /// A `$topic_preference` is queued like any event, so for a while — seconds online, days in a lift
 /// — the server still answers with the old value. Shown as is, a toggle the person just flipped
 /// would flip back on the next fetch. So every choice is kept here too, and **a choice kept here
-/// wins over the server's value** until one of three things:
+/// wins over the server's value** until one of two things:
 ///
 /// - a fetch shows the server holding the same choice (`chosen`, and the same `subscribed`): it
 ///   has caught up, and from then on it is the truth;
-/// - the upload carrying it was rejected for good, so the server will never have it;
 /// - a reset (sign-out, or a different account signing in): the choice belonged to the person who
 ///   left, and must not be shown to the next one.
 ///
 /// A topic the server no longer lists is forgotten here too; the queued event still goes.
+///
+/// An upload answered with a 2xx marks the choice it carried `accepted`, and it stays pending
+/// until a fetch settles it as above. An upload refused for good (any 4xx but a 429) no longer
+/// releases it: the choice is left unaccepted with no event waiting, and the client sends it again
+/// as a new `$topic_preference` at the next startup or registration recheck
+/// (`AnalyticsClient.resendPendingTopicChoices`). A choice whose event is still queued is not sent
+/// twice.
 ///
 /// Kept in the app's own store, like identity: it describes this install's person.
 public final class TopicPreferenceStore {
@@ -139,8 +145,29 @@ public final class TopicPreferenceStore {
 
     public struct Pending: Codable, Equatable, Sendable {
         public let subscribed: Bool
-        /// The `$topic_preference` that carries it, so a rejected upload can release it.
+        /// The `$topic_preference` that carries it, so an upload's answer can be matched to it.
+        /// Empty once an upload carrying it was refused for good: nothing is on its way.
         public let eventId: String
+        /// Whether an upload carrying it was answered with a 2xx. Missing in a choice stored by an
+        /// older SDK, which reads as false.
+        public let accepted: Bool
+
+        public init(subscribed: Bool, eventId: String, accepted: Bool = false) {
+            self.subscribed = subscribed
+            self.eventId = eventId
+            self.accepted = accepted
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            subscribed = try container.decode(Bool.self, forKey: .subscribed)
+            eventId = try container.decodeIfPresent(String.self, forKey: .eventId) ?? ""
+            accepted = try container.decodeIfPresent(Bool.self, forKey: .accepted) ?? false
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case subscribed, eventId, accepted
+        }
     }
 
     public var pending: [String: Pending] {
@@ -180,16 +207,49 @@ public final class TopicPreferenceStore {
         return result
     }
 
-    /// An upload was rejected for good: whatever it carried will never reach the server.
+    /// An upload succeeded: the choices it carried reached the server. They stay pending, for the
+    /// overlay, until a fetch shows the server holding them.
+    public func accept(acceptedLines lines: [String]) {
+        update(matching: lines) { Pending(subscribed: $0.subscribed, eventId: $0.eventId, accepted: true) }
+    }
+
+    /// An upload was refused for good: the choices it carried will not reach the server this way,
+    /// so they stay pending, unaccepted and with no event on its way, to be sent again.
+    public func requeue(droppedLines lines: [String]) {
+        update(matching: lines) { Pending(subscribed: $0.subscribed, eventId: "", accepted: false) }
+    }
+
+    /// The 0.2.0 name, kept so code calling it still builds. A refused choice is no longer released:
+    /// it is kept to be sent again, as `requeue(droppedLines:)` does.
+    @available(*, deprecated, renamed: "requeue(droppedLines:)")
     public func release(droppedLines lines: [String]) {
+        requeue(droppedLines: lines)
+    }
+
+    /// The choices to send again: not accepted, and no queued event carrying them. `isQueued` asks
+    /// the queue about an id.
+    public func toResend(isQueued: (String) -> Bool) -> [String: Bool] {
+        lock.lock()
+        defer { lock.unlock() }
+        return read()
+            .filter { !$0.value.accepted && ($0.value.eventId.isEmpty || !isQueued($0.value.eventId)) }
+            .mapValues(\.subscribed)
+    }
+
+    private func update(matching lines: [String], _ change: (Pending) -> Pending) {
         lock.lock()
         defer { lock.unlock() }
         var all = read()
         guard !all.isEmpty else { return }
-        let dropped = all.filter { entry in lines.contains { $0.contains("\"event_id\":\"\(entry.value.eventId)\"") } }
-        guard !dropped.isEmpty else { return }
-        dropped.keys.forEach { all[$0] = nil }
-        write(all)
+        var changed = false
+        for (topic, entry) in all where !entry.eventId.isEmpty {
+            let marker = "\"event_id\":\"\(entry.eventId)\""
+            if lines.contains(where: { $0.contains(marker) }) {
+                all[topic] = change(entry)
+                changed = true
+            }
+        }
+        if changed { write(all) }
     }
 
     public func clear() {

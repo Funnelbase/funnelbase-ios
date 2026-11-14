@@ -16,6 +16,9 @@ public final class AnalyticsClient {
     private let uploader: EventUploader
     private let topics: TopicsFetcher
     private let topicChoices: TopicPreferenceStore
+    /// The last push registration sent, and whether the server has it. Read and written on the
+    /// worker, so a registration and the upload answering it are seen in queue order.
+    public let pushTokens: PushTokenStore
     private let device: DeviceContext
     /// Read per event over [device]'s locale and time zone; nil where a test fixed the device.
     private let region: (() -> DeviceRegion)?
@@ -51,6 +54,9 @@ public final class AnalyticsClient {
         self.uploader = uploader ?? EventUploader(url: config.eventsUrl, apiKey: config.apiKey, debugLogging: config.debugLogging)
         self.topics = topics ?? TopicsFetcher(url: config.topicsUrl, apiKey: config.apiKey)
         self.topicChoices = TopicPreferenceStore(defaults: store)
+        // The app's own store, not the group's: a group container survives the app being deleted,
+        // and a remembered registration is one the SDK would never send again.
+        self.pushTokens = PushTokenStore(defaults: store)
         self.device = device ?? DeviceInfo.collect()
         self.region = region ?? (device == nil ? DeviceInfo.region : nil)
         self.installedAtMillis = installedAtMillis ?? DeviceInfo.installedAtMillis()
@@ -61,6 +67,8 @@ public final class AnalyticsClient {
         Storage.writeCredentials(apiKey: config.apiKey, endpoint: config.endpoint, into: shared)
         Storage.mirrorIdentity(from: identity, into: shared)
         startTimer()
+        // A choice an earlier launch saw refused for good is sent again now.
+        resendPendingTopicChoices()
     }
 
     // MARK: - Recording
@@ -118,24 +126,70 @@ public final class AnalyticsClient {
         }
         let occurredAt = now()
         work.async { [weak self] in
+            self?.queueTopicChoice(topic, subscribed: subscribed, occurredAt: occurredAt)
+            // Sent now rather than at the next interval: the server has to know before the next
+            // campaign is sent, and a settings screen is a moment the person is waiting anyway.
+            self?.drain()
+        }
+    }
+
+    /// Sends again every pending choice the server has not accepted and no queued event carries —
+    /// one whose upload was refused for good — through the same path as `setTopic`. Called at
+    /// startup and at every push registration recheck; a choice still queued is left alone.
+    public func resendPendingTopicChoices() {
+        work.async { [weak self] in
             guard let self else { return }
+            let choices = self.topicChoices.toResend(isQueued: { self.queue.contains(eventId: $0) })
+            guard !choices.isEmpty else { return }
+            let occurredAt = self.now()
+            for (topic, subscribed) in choices.sorted(by: { $0.key < $1.key }) {
+                self.queueTopicChoice(topic, subscribed: subscribed, occurredAt: occurredAt)
+            }
+            self.drain()
+        }
+    }
+
+    // MARK: - Push registration
+
+    /// Registers a push token as `$push_token`: when the token, its kind, its status, the phone's
+    /// language or its time zone differs from the last one sent, and also when the last one was
+    /// never confirmed by a 2xx and its event is no longer queued — the upload carrying it was
+    /// refused for good, or it was sent by an SDK that kept no confirmation. A registration still
+    /// queued is not sent twice. `Analytics.push` calls it on every `setToken` and `refreshToken`.
+    public func registerPushToken(_ token: String, kind: String, status: String, region: DeviceRegion) {
+        let occurredAt = now()
+        work.async { [weak self] in
+            guard let self else { return }
+            let tokens = self.pushTokens
+            let changed = tokens.shouldSend(token: token, kind: kind, status: status, region: region)
+            // `shouldSend` false for a real token means it is the remembered one, unchanged.
+            let lost = !changed && !token.trimmed.isEmpty
+                && tokens.needsResend(isQueued: { self.queue.contains(eventId: $0) })
+            guard changed || lost else { return }
             let event = self.buildEvent(
-                ReservedEvents.topicPreference,
+                ReservedEvents.pushToken,
                 occurredAt: occurredAt,
                 sessionId: "",
                 properties: [
-                    ReservedEvents.topicPreferenceTopic: topic,
-                    ReservedEvents.topicPreferenceSubscribed: subscribed,
+                    ReservedEvents.pushTokenToken: token,
+                    ReservedEvents.pushTokenKind: kind,
+                    ReservedEvents.pushTokenStatus: status,
                 ],
                 traits: [:],
                 userId: self.identity.userId
             )
-            self.topicChoices.remember(topic: topic, subscribed: subscribed, eventId: event.eventId)
+            // Remembered before the enqueue, as before: a crash between the two costs a resend at
+            // the next recheck, since the event is in no queue and nothing confirmed it.
+            tokens.remember(token: token, kind: kind, status: status, region: region, eventId: event.eventId)
             self.enqueue(event)
-            // Sent now rather than at the next interval: the server has to know before the next
-            // campaign is sent, and a settings screen is a moment the person is waiting anyway.
-            self.drain()
+            self.drainIfFull()
         }
+    }
+
+    /// A sign-in, an account switch or a sign-out: the registration, and whether it was confirmed,
+    /// is forgotten in queue order, so the next one is sent under whoever this device is now.
+    public func forgetPushRegistration() {
+        work.async { [weak self] in self?.pushTokens.forget() }
     }
 
     /// The app's active topics and this person's choice on each, with this install's pending
@@ -171,6 +225,23 @@ public final class AnalyticsClient {
     }
 
     // MARK: - The worker's own
+
+    /// Worker queue only. One `$topic_preference`, kept pending under its event id.
+    private func queueTopicChoice(_ topic: String, subscribed: Bool, occurredAt: Date) {
+        let event = buildEvent(
+            ReservedEvents.topicPreference,
+            occurredAt: occurredAt,
+            sessionId: "",
+            properties: [
+                ReservedEvents.topicPreferenceTopic: topic,
+                ReservedEvents.topicPreferenceSubscribed: subscribed,
+            ],
+            traits: [:],
+            userId: identity.userId
+        )
+        topicChoices.remember(topic: topic, subscribed: subscribed, eventId: event.eventId)
+        enqueue(event)
+    }
 
     /// Worker queue only.
     private func record(
@@ -266,6 +337,7 @@ public final class AnalyticsClient {
             switch uploader.upload(batchEnvelope(lines)) {
             case .success:
                 queue.removeFirst(lines.count)
+                batchAccepted(lines)
                 log("Uploaded \(lines.count) events, \(queue.size()) still queued")
             case .retryable(let reason):
                 log("Upload deferred (\(reason)); \(queue.size()) events still queued")
@@ -275,10 +347,28 @@ public final class AnalyticsClient {
                 // every event behind them forever.
                 print("[Analytics] dropping \(lines.count) events the server rejected: \(reason)")
                 queue.removeFirst(lines.count)
-                // A topic choice among them will never reach the server, so it stops overriding it.
-                topicChoices.release(droppedLines: lines)
+                batchDropped(lines)
             }
         }
+    }
+
+    /// Worker queue only. The server answered these lines with a 2xx: a push registration or a
+    /// topic choice among them has reached it.
+    private func batchAccepted(_ lines: [String]) {
+        pushTokens.confirm(acceptedLines: lines)
+        topicChoices.accept(acceptedLines: lines)
+    }
+
+    /// Worker queue only. These lines were refused for good: a push registration or a topic choice
+    /// among them never reached the server, and is sent again at the next recheck.
+    private func batchDropped(_ lines: [String]) {
+        pushTokens.unconfirm(droppedLines: lines)
+        topicChoices.requeue(droppedLines: lines)
+    }
+
+    /// Tests only: returns once everything handed to the worker so far has run.
+    func waitForWorker() {
+        work.sync {}
     }
 
     /// The batch envelope, with the already-serialized lines spliced in as raw JSON: they came off

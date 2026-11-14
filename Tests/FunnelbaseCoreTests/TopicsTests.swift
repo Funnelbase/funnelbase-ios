@@ -208,14 +208,17 @@ final class TopicsTests: XCTestCase {
         XCTAssertEqual(store.pending.count, 1, "the server has not stored it yet")
     }
 
-    func testARejectedUploadReleasesTheChoiceItCarried() throws {
+    func testARejectedUploadKeepsTheChoiceItCarriedToSendAgain() throws {
         let store = TopicPreferenceStore(defaults: defaults())
         store.remember(topic: "promotions", subscribed: false, eventId: "e-1")
         store.remember(topic: "price_alerts", subscribed: false, eventId: "e-2")
 
-        store.release(droppedLines: ["{\"event_id\":\"e-1\",\"event_name\":\"$topic_preference\"}"])
+        store.requeue(droppedLines: ["{\"event_id\":\"e-1\",\"event_name\":\"$topic_preference\"}"])
 
-        XCTAssertEqual(Array(store.pending.keys), ["price_alerts"])
+        XCTAssertEqual(Set(store.pending.keys), ["promotions", "price_alerts"], "a refused upload no longer releases it")
+        XCTAssertEqual(store.pending["promotions"], .init(subscribed: false, eventId: "", accepted: false))
+        XCTAssertEqual(store.toResend(isQueued: { _ in true }), ["promotions": false],
+                       "nothing carries it any more; the other is still queued")
     }
 
     func testATopicTheServerNoLongerListsIsForgotten() {

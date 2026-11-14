@@ -15,7 +15,18 @@ gateway of its own all work the same way. The flow on the device, step by step, 
 
 Each sends a passive `$push_token` ([event-contract.md](event-contract.md#passive-events)) with
 the notification permission as its `status`, and only when the token, its kind or its status
-changed. `refreshToken()` re-reads the permission after the app has asked for it.
+changed (or the phone's language or time zone). `refreshToken()` re-reads the permission after the
+app has asked for it.
+
+A registration counts as sent only once the server has it: it is remembered with the id of the
+`$push_token` that carried it, unconfirmed, and confirmed when an upload carrying that event is
+answered with a 2xx. An upload refused for good (any 4xx but a 429, such as a `403 plan_limit` while
+a workspace is capped) drops the batch, and the registration stays unconfirmed with no event on its
+way. The next recheck — `setToken`, or `refreshToken` at startup, on a language or time zone change,
+or after asking for permission — sends the same token again as a new `$push_token`, unless its event
+is still queued. An install updated from 0.2.0, which kept no confirmation, registers once more after
+the update. A sign-in, an account switch or a sign-out still forgets the registration, confirmation
+included, and registers it again under the new person.
 
 ## The payload
 
