@@ -131,6 +131,28 @@ install time to the account.
 topics and the person's choice for each, so an app can draw a settings screen without hard-coding
 any topic. A `503 topics_unavailable` means the server cannot answer right now; show what you have.
 
+## What the answer means
+
+`POST /v1/events` answers **`202`** with what was accepted and what was rejected, event by event.
+A client keeps a batch and tries again later on **`429`** or a **`5xx`**, and drops it on any other
+`4xx`, since retrying would never work: a bad key, a malformed payload.
+
+**`403 plan_limit`** is one of those: the workspace is over its plan's limit (a free workspace past
+its month's events or monthly users, or an app paused by a downgrade — the platform's plan limits). The
+backend has already kept the batch's passive events — a push token, a receipt, a topic choice must
+never be lost — and discarded the rest for good, so dropping the batch loses nothing a retry would
+have saved. A batch of passive events alone is answered `202`. The body is the platform's
+`PlanLimitError`: `{"error": "plan_limit", "message": …, "limit": "events", …}`.
+
+**Confirmed registrations.** A client records a push token registration or a topic choice as sent
+only once a batch carrying it is accepted (a `2xx`). One whose batch is refused for good is sent
+again at the next launch or return to the front (on Android also a configuration change), and never
+twice while a copy is still waiting in the queue. An install updating from an SDK without this
+sends its registration once more, which also heals one lost before. Decided 2026-11-14; in the
+releases after Android 0.4.0 and iOS 0.2.0, and in Flutter once its native dependencies move to them.
+Older clients record one as sent when it is queued, so a refused one stays lost until something
+about it changes — which is why the backend keeps a refused batch's passive events.
+
 ## Older clients
 
 - **No `device_id`:** the event is accepted and stored with an empty device id.

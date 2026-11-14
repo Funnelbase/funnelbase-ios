@@ -72,6 +72,8 @@ rather than half of a new one.
    gateway token. The SDK reads the authorization status, which Apple only answers asynchronously,
    and sends `$push_token` with `status` `active` or `disabled` — but only when the token, its kind
    or its status differs from the last one sent, or a registration would be an event per launch.
+   The one exception is a registration the server never confirmed with a 2xx and that is no
+   longer queued — its upload was refused for good — which is sent again ([push.md](push.md#tokens)).
 3. **The push arrives.** Funnelbase sends an alert with `mutable-content`, which is what makes
    Apple run the extension before the banner appears. In its thirty seconds the extension records
    the receipt, registers a category for the message's buttons, sets the thread from the collapse
@@ -131,11 +133,14 @@ with the ingest key; a non-2xx answer is `TopicsError.http(status:)`, so a
 
 A choice the server may not hold yet wins over its answer. Each `set` is kept **pending** in the
 app's own container (not the app group) and overrides the fetched value, marked `chosen`, until a
-fetch shows the server holding the same choice as the person's own, the upload carrying it is
-refused for good, a reset clears it, or the topic is no longer listed. It is not released when the
-upload succeeds: the choice still has to be processed on the server, and the next fetch could be
-older than it. Nothing expires it by time, so a choice lost to a full queue stays pending until
-the server agrees or the person signs out.
+fetch shows the server holding the same choice as the person's own, a reset clears it, or the topic
+is no longer listed. It is not released when the upload succeeds, only marked accepted: the choice
+still has to be processed on the server, and the next fetch could be older than it. Nor is it
+released when the upload carrying it is refused for good (any 4xx but a 429, such as a
+`403 plan_limit`): it stays pending, unaccepted, and is sent again as a new `$topic_preference` at
+the next startup or push registration recheck (`refreshToken`), unless its event is still queued.
+Nothing expires it by time, so a choice lost to a full queue is sent again the same way and stays
+pending until the server agrees or the person signs out.
 
 iOS has nothing like Android's notification channels, so the token's `status` stays the
 authorization alone.
