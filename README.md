@@ -24,7 +24,7 @@ Or in `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Funnelbase/funnelbase-ios.git", from: "0.2.0"),
+    .package(url: "https://github.com/Funnelbase/funnelbase-ios.git", from: "0.3.0"),
 ],
 targets: [
     .target(name: "MyApp", dependencies: [.product(name: "Funnelbase", package: "funnelbase-ios")]),

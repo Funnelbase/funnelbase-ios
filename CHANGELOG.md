@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 - A push token registration counts as sent only once an upload carrying its `$push_token` is
   answered with a 2xx. If the upload is refused for good (any 4xx but a 429, such as the backend's
