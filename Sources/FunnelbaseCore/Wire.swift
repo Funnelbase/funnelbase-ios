@@ -211,8 +211,9 @@ public enum TokenStatuses {
 public enum Sdk {
     public static let name = "ios"
     /// Bumped with the wire format. 0.1.0 is the first iOS release, at the Android SDK's 0.3.0
-    /// contract; 0.2.0 adds notification topics (`$topic_preference` and `GET /v1/topics`).
-    public static let version = "0.2.0"
+    /// contract; 0.2.0 adds notification topics (`$topic_preference` and `GET /v1/topics`); 0.3.0
+    /// counts a registration or topic choice as sent only once the server accepts it.
+    public static let version = "0.3.0"
 }
 
 /// One encoder and one decoder, configured the way the backend expects.
